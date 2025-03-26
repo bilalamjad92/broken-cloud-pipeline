@@ -1,0 +1,10 @@
+variable "name" { type = string }
+variable "vpc_id" { type = string }
+variable "private_subnets" { type = list(string) }
+variable "container_name" { type = string }
+variable "container_image" { type = string }
+variable "container_count" { type = number }
+variable "cpu" { type = number }
+variable "tags" { type = object({}) }
+variable "target_group_arn" { type = string }
+variable "alb_security_group_id" { type = string } # Add this line
