@@ -7,4 +7,4 @@ variable "container_count" { type = number }
 variable "cpu" { type = number }
 variable "tags" { type = object({}) }
 variable "target_group_arn" { type = string }
-variable "alb_security_group_id" { type = string } # Add this line
+variable "alb_security_group_id" { type = string }
