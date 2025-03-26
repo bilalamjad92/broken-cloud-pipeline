@@ -1,1 +1,2 @@
 - **HTTPS**: Using HTTP (port 80) due to no domain; HTTPS requires a domain for ACM compliance.
+- Plan to switch to HTTPS with a domain later.
