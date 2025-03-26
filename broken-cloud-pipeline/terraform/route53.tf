@@ -1,5 +1,4 @@
 resource "aws_route53_health_check" "app" {
-  fqdn              = module.app_alb.alb_dns_name
   port              = 80
   type              = "HTTP"
   resource_path     = "/"
@@ -9,7 +8,6 @@ resource "aws_route53_health_check" "app" {
 }
 
 resource "aws_route53_health_check" "jenkins" {
-  fqdn              = module.jenkins_alb.alb_dns_name
   port              = 80
   type              = "HTTP"
   resource_path     = "/login"
@@ -17,3 +15,4 @@ resource "aws_route53_health_check" "jenkins" {
   failure_threshold = 3
   tags              = { Component = "Route53" }
 }
+#commented
