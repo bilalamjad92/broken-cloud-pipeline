@@ -12,10 +12,11 @@ pipeline {
     stages {
         stage('Checkout') {
             steps {
-                git url: 'https://github.com/infrastructureascode/hello-world.git', branch: 'main'
-                // FLAW: Excessive logging bloats CloudWatch and S3 logs
-                sh 'echo "Excessive Logging: Full directory listing:"'
-                sh 'ls -la || dir'  // Cross-platform, unnecessary detail
+                withCredentials([usernamePassword(credentialsId: 'github-cred-id', usernameVariable: 'GIT_USER', passwordVariable: 'GIT_PASS')]) {
+                    git url: "${GIT_REPO}", branch: 'main', credentialsId: 'github-cred-id'
+                    sh 'echo "Excessive Logging: Full directory listing:"'
+                    sh 'ls -la || dir'
+                }
             }
         }
         stage('Build Docker Image') {
@@ -29,15 +30,38 @@ pipeline {
         }
         stage('Push to ECR') {
             steps {
-                // FLAW: Excessive logging bloats CloudWatch and S3 logs
-                sh 'echo "Excessive Logging: ECR push with extra details:"'
-                sh 'aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${ECR_REGISTRY}'
-                sh 'docker push ${ECR_REGISTRY}/${ECR_REPO}:${IMAGE_TAG}'
-                sh 'docker images | grep ${ECR_REPO}'  // Redundant output
+                withAWS(credentials: 'aws-cred-id', region: "${AWS_REGION}") {
+                    script {
+                        def taskDef = """
+                        {
+                            "family": "app-task",
+                            "networkMode": "bridge",
+                            "containerDefinitions": [{
+                                "name": "hello-world",
+                                "image": "${ECR_REGISTRY}/${ECR_REPO}:${IMAGE_TAG}",
+                                "cpu": 512,  // Matches Terraform flaw
+                                "memory": 512,  // Matches Terraform
+                                "portMappings": [{"containerPort": 8080, "hostPort": 0, "protocol": "tcp"}],
+                                "logConfiguration": {
+                                    "logDriver": "awslogs",
+                                    "options": {
+                                        "awslogs-group": "/ecs/app-task",
+                                        "awslogs-region": "eu-central-1",
+                                        "awslogs-stream-prefix": "ecs"
+                                    }
+                                }
+                            }]
+                        }
+                        """
+                        writeFile file: 'task.json', text: taskDef
+                        sh 'aws ecs register-task-definition --cli-input-json file://task.json'
+                    }
+                }
             }
         }
         stage('Deploy to ECS') {
             steps {
+                withAWS(credentials: 'aws-cred-id', region: "${AWS_REGION}") {
                 // FLAW: Excessive logging bloats CloudWatch and S3 logs
                 sh 'echo "Excessive Logging: ECS deployment with task list:"'
                 sh 'aws ecs update-service --cluster ${ECS_CLUSTER} --service ${ECS_SERVICE} --force-new-deployment --region ${AWS_REGION}'
@@ -47,13 +71,15 @@ pipeline {
     }
     post {
         always {
-            // FLAW: Excessive logging bloats CloudWatch and S3 logs
-            sh 'echo "Excessive Logging: Full environment dump:"'
-            sh 'env'  // Dumps entire env vars
-            script {
-                def status = currentBuild.currentResult
-                sh "aws sns publish --topic-arn ${SNS_TOPIC} --message 'Pipeline ${status} - Build #${env.BUILD_NUMBER}' --region ${AWS_REGION}"
+            withAWS(credentials: 'aws-cred-id', region: "${AWS_REGION}") {
+                sh 'echo "Excessive Logging: Full environment dump:"'
+                sh 'env'
+                script {
+                    def status = currentBuild.currentResult
+                    sh "aws sns publish --topic-arn ${SNS_TOPIC} --message 'Pipeline ${status} - Build #${BUILD_NUMBER}'"
+                }
             }
         }
+
     }
 }
