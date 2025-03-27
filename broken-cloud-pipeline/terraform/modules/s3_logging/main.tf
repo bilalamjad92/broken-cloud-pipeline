@@ -2,23 +2,27 @@ resource "aws_s3_bucket" "this" {
   bucket_prefix = "${var.name}-logs-"
   tags          = var.tags
 }
+
 resource "aws_s3_bucket_ownership_controls" "this" {
   bucket = aws_s3_bucket.this.id
   rule {
     object_ownership = "BucketOwnerPreferred" 
   }
 }
+
 resource "aws_s3_bucket_acl" "this" {
   bucket     = aws_s3_bucket.this.id
   acl        = "log-delivery-write" # Allows ELB to write logs, it is there is aws docs
   depends_on = [aws_s3_bucket_ownership_controls.this]
 }
+
 resource "aws_s3_bucket_versioning" "this" {
   bucket = aws_s3_bucket.this.id
   versioning_configuration {
     status = "Enabled"
   }
 }
+
 resource "aws_s3_bucket_lifecycle_configuration" "this" {
   bucket = aws_s3_bucket.this.id
   rule {
