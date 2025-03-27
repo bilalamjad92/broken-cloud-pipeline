@@ -1,4 +1,2 @@
-docker-workflow:latest
-amazon-ecs:latest
-pipeline-aws:latest
-notification:latest
+git:latest
+workflow-aggregator:latest
