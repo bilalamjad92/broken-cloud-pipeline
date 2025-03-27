@@ -2,12 +2,13 @@ resource "aws_ecs_cluster" "this" {
   name = "${var.name}-cluster"
   tags = var.tags
 }
+
 resource "aws_security_group" "ecs_instance_sg" {
   name_prefix = "${var.name}-ecs-sg-"
   vpc_id      = var.vpc_id
   ingress {
-    from_port       = 32768
-    to_port         = 65535
+    from_port       = 8080
+    to_port         = 8080
     protocol        = "tcp"
     security_groups = [var.alb_security_group_id]
   }
@@ -19,6 +20,7 @@ resource "aws_security_group" "ecs_instance_sg" {
   }
   tags = var.tags
 }
+
 resource "aws_iam_role" "ecs_instance_role" {
   name = "${var.name}-ecs-instance-role"
   assume_role_policy = jsonencode({
@@ -31,17 +33,21 @@ resource "aws_iam_role" "ecs_instance_role" {
   })
   tags = var.tags
 }
+
 resource "aws_iam_role_policy_attachment" "ecs_instance_policy" {
   role       = aws_iam_role.ecs_instance_role.name
   policy_arn = "arn:aws:iam::aws:policy/service-role/AmazonEC2ContainerServiceforEC2Role"
 }
+
 resource "aws_iam_instance_profile" "ecs_instance_profile" {
   name = "${var.name}-ecs-instance-profile"
   role = aws_iam_role.ecs_instance_role.name
 }
+
 data "aws_ssm_parameter" "ecs_ami" {
   name = "/aws/service/ecs/optimized-ami/amazon-linux-2/recommended/image_id"
 }
+
 resource "aws_launch_template" "ecs" {
   name_prefix            = "${var.name}-ecs-"
   image_id               = data.aws_ssm_parameter.ecs_ami.value
@@ -55,6 +61,7 @@ resource "aws_launch_template" "ecs" {
   )
   tags = var.tags
 }
+
 resource "aws_autoscaling_group" "ecs" {
   name_prefix         = "${var.name}-ecs-asg-"
   vpc_zone_identifier = var.private_subnets # Place in private subnets
@@ -76,6 +83,8 @@ resource "aws_autoscaling_group" "ecs" {
     propagate_at_launch = true
   }
 }
+
+
 resource "aws_ecs_capacity_provider" "this" {
   name = "${var.name}-ecs-cp"
   auto_scaling_group_provider {
@@ -88,6 +97,7 @@ resource "aws_ecs_capacity_provider" "this" {
     }
   }
 }
+
 resource "aws_ecs_cluster_capacity_providers" "this" {
   cluster_name       = aws_ecs_cluster.this.name
   capacity_providers = [aws_ecs_capacity_provider.this.name]
@@ -97,6 +107,8 @@ resource "aws_ecs_cluster_capacity_providers" "this" {
     weight            = 100
   }
 }
+
+
 resource "aws_ecs_task_definition" "this" {
   family       = "${var.name}-task"
   network_mode = "bridge"
@@ -136,6 +148,7 @@ resource "aws_ecs_service" "this" {
     capacity_provider = aws_ecs_capacity_provider.this.name
     weight            = 1
   }
+
   depends_on = [var.target_group_arn, aws_ecs_cluster_capacity_providers.this] # Ensure ALB is ready
 }
 resource "aws_cloudwatch_log_group" "ecs" {
