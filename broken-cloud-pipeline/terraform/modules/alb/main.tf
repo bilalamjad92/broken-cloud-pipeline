@@ -12,6 +12,8 @@ resource "aws_lb" "this" {
   }
   depends_on = [var.log_bucket_policy_id] # Ensure policy is applied first.manadatory to create
 }
+
+# Security Group for ALB
 resource "aws_security_group" "alb" {
   name_prefix = "${var.name}-alb-sg-"
   vpc_id      = var.vpc_id
@@ -41,17 +43,17 @@ resource "aws_security_group" "alb" {
   }
   tags = var.tags
 }
+
+# Target Group for ECS Service
 resource "aws_lb_target_group" "this" {
   name_prefix = "tg-"
   vpc_id      = var.vpc_id
   protocol    = "HTTP"
-  port        = 8080 # Changed to 8080 for both
+  port        = var.name == "jenkins" ? 8080 : 80 #8080 # Changed to 8080 for both
   target_type = "instance"
   health_check {
-    path                = var.name == "jenkins" ? "/login" : "/"
-    port                = var.name == "jenkins" ? "8080" : "80"
-    # path                = var.name == "jenkins" ? "/login" : "/health"
-    # port                = "traffic-port"
+    path                = var.name == "jenkins" ? "/login" : "/health"
+    port                = "traffic-port"
     healthy_threshold   = 2
     unhealthy_threshold = 10
     timeout             = 90
@@ -63,6 +65,8 @@ resource "aws_lb_target_group" "this" {
     create_before_destroy = true
   }
 }
+
+# Listener (HTTP for testing)
 resource "aws_lb_listener" "https" {
   load_balancer_arn = aws_lb.this.arn
   port              = 443
@@ -73,9 +77,9 @@ resource "aws_lb_listener" "https" {
     type             = "forward"
     target_group_arn = aws_lb_target_group.this.arn
   }
-  depends_on = [aws_lb_target_group.this] # Ensure TG exists before listener
+  depends_on = [aws_lb_target_group.this]
   lifecycle {
-    replace_triggered_by = [aws_lb_target_group.this.id] # Force listener update when TG changes
+    replace_triggered_by = [aws_lb_target_group.this.id] 
   }
 }
 resource "aws_lb_listener" "http" {
@@ -88,20 +92,27 @@ resource "aws_lb_listener" "http" {
   }
   depends_on = [aws_lb_target_group.this]
 }
+# AWS WAF Web ACL for Geo-Restriction (Jenkins ALB only)
 resource "aws_wafv2_web_acl" "jenkins_geo_restriction" {
   count = var.name == "jenkins" ? 1 : 0 
+
   name        = "jenkins-geo-restriction"
   description = "Restrict Jenkins ALB to Portugal"
   scope       = "REGIONAL" # Use REGIONAL for ALBs
+
   default_action {
-    allow {} # Allow traffic by default unless blocked by rules
+    allow {} 
   }
+
+  # Rule to block traffic not from Portugal
   rule {
     name     = "allow-portugal-only"
     priority = 1
+
     action {
       block {} # Block requests not matching the condition
     }
+
     statement {
       not_statement {
         statement {
@@ -111,23 +122,25 @@ resource "aws_wafv2_web_acl" "jenkins_geo_restriction" {
         }
       }
     }
+
     visibility_config {
       cloudwatch_metrics_enabled = true
       metric_name                = "JenkinsGeoRestriction"
       sampled_requests_enabled   = true
     }
   }
+
   visibility_config {
     cloudwatch_metrics_enabled = true
     metric_name                = "JenkinsWebACL"
     sampled_requests_enabled   = true
   }
-
   tags = var.tags
 }
+
+# Associate WAF with Jenkins ALB
 resource "aws_wafv2_web_acl_association" "jenkins_waf" {
   count = var.name == "jenkins" ? 1 : 0
-
   resource_arn = aws_lb.this.arn
   web_acl_arn  = aws_wafv2_web_acl.jenkins_geo_restriction[0].arn
 }
