@@ -11,3 +11,6 @@ variable "tags" {
   }
   description = "Default tags applied to all resources"
 }
+variable "ecr_registry" { default = "216989105561.dkr.ecr.eu-central-1.amazonaws.com" }
+variable "ecr_repo" { default = "hello-world" }
+variable "image_tag" { default = "latest" }
