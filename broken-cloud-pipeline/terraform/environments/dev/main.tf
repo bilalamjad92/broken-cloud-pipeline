@@ -13,77 +13,77 @@ module "jenkins_vpc" {
 }
 
 resource "aws_vpc_peering_connection" "app_to_jenkins" {
-  vpc_id        = module.app_vpc.vpc_id
-  peer_vpc_id   = module.jenkins_vpc.vpc_id
-  auto_accept   = true
-  tags          = var.tags
+  vpc_id      = module.app_vpc.vpc_id
+  peer_vpc_id = module.jenkins_vpc.vpc_id
+  auto_accept = true
+  tags        = var.tags
 }
 
 module "app_ecs" {
-  source               = "../../modules/ecs_cluster"
-  name                 = "app"
-  vpc_id               = module.app_vpc.vpc_id
-  private_subnets      = module.app_vpc.private_subnets
-  container_name       = "hello-world"
-  container_image      = "infrastructureascode/hello-world"
-  container_count      = 2
-  cpu                  = 128
-  target_group_arn     = module.app_alb.target_group_arn
+  source                = "../../modules/ecs_cluster"
+  name                  = "app"
+  vpc_id                = module.app_vpc.vpc_id
+  private_subnets       = module.app_vpc.private_subnets
+  container_name        = "hello-world"
+  container_image       = "${var.ecr_registry}/${var.ecr_repo}:${var.image_tag}"
+  container_count       = 2
+  cpu                   = 128 #can utilize var.app_cpu as per challenge 512
+  target_group_arn      = module.app_alb.target_group_arn
   alb_security_group_id = module.app_alb.alb_security_group_id
-  tags                 = var.tags
-  depends_on        = [module.app_alb]  # Ensure ALB is fully configured
+  tags                  = var.tags
+  depends_on            = [module.app_alb] # Ensure ALB is fully configured
 }
 
 module "jenkins_ecs" {
-  source               = "../../modules/ecs_cluster"
-  name                 = "jenkins"
-  vpc_id               = module.jenkins_vpc.vpc_id
-  private_subnets      = module.jenkins_vpc.private_subnets
-  container_name       = "jenkins"
-  container_image      = "216989105561.dkr.ecr.eu-central-1.amazonaws.com/custom-jenkins:latest"
- # container_image      = "jenkins/jenkins:lts"
-  container_count      = 1
-  cpu                  = 256
-  target_group_arn     = module.jenkins_alb.target_group_arn
+  source                = "../../modules/ecs_cluster"
+  name                  = "jenkins"
+  vpc_id                = module.jenkins_vpc.vpc_id
+  private_subnets       = module.jenkins_vpc.private_subnets
+  container_name        = "jenkins"
+  container_image       = "216989105561.dkr.ecr.eu-central-1.amazonaws.com/custom-jenkins:latest"
+  container_count       = 1
+  cpu                   = 256 #can utilize var.app_cpu as per challenge 512
+  target_group_arn      = module.jenkins_alb.target_group_arn
   alb_security_group_id = module.jenkins_alb.alb_security_group_id
-  tags                 = var.tags
-  depends_on        = [module.jenkins_alb]  # Ensure ALB is fully configured
+  tags                  = var.tags
+  depends_on            = [module.jenkins_alb] # Ensure ALB is fully configured
 }
 
 # S3 Logging Module
 module "s3_logging" {
   source = "../../modules/s3_logging"
   name   = "pipeline"
-  tags   = {}
+  tags   = var.tags
 }
 
 module "app_alb" {
-  source          = "../../modules/alb"
-  name            = "app"
-  vpc_id          = module.app_vpc.vpc_id
-  public_subnets  = module.app_vpc.public_subnets
-  allowed_cidr    = ["0.0.0.0/0"]
-  log_bucket_id = module.s3_logging.bucket_id
-  log_bucket_policy_id = module.s3_logging.bucket_policy_id  # Pass policy ID
-  tags            = var.tags
+  source               = "../../modules/alb"
+  name                 = "app"
+  vpc_id               = module.app_vpc.vpc_id
+  public_subnets       = module.app_vpc.public_subnets
+  allowed_cidr         = ["0.0.0.0/0"]
+  log_bucket_id        = module.s3_logging.bucket_id
+  log_bucket_policy_id = module.s3_logging.bucket_policy_id # Pass policy ID
+  tags                 = var.tags
+  certificate_arn      = "arn:aws:acm:eu-central-1:216989105561:certificate/15556a87-717c-44e7-8d68-aaf146333c17"
 }
 
 module "jenkins_alb" {
-  source          = "../../modules/alb"
-  name            = "jenkins"
-  vpc_id          = module.jenkins_vpc.vpc_id
-  public_subnets  = module.jenkins_vpc.public_subnets
-  allowed_cidr    = ["0.0.0.0/0"]
-  log_bucket_id = module.s3_logging.bucket_id
-  log_bucket_policy_id = module.s3_logging.bucket_policy_id  # Pass policy ID
-  tags            = var.tags
+  source               = "../../modules/alb"
+  name                 = "jenkins"
+  vpc_id               = module.jenkins_vpc.vpc_id
+  public_subnets       = module.jenkins_vpc.public_subnets
+  allowed_cidr         = ["0.0.0.0/0"] #allowed from all but can be adjusted with portugal CIDR 185.94.0.0/16 recomendation is WAF/CDN cloudfront in that case.not configured due to submision issue
+  log_bucket_id        = module.s3_logging.bucket_id
+  log_bucket_policy_id = module.s3_logging.bucket_policy_id
+  tags                 = var.tags
+  certificate_arn      = "arn:aws:acm:eu-central-1:216989105561:certificate/15556a87-717c-44e7-8d68-aaf146333c17"
 }
-
 # Lambda to Export ECS Logs to S3
 data "archive_file" "lambda" {
   type        = "zip"
   source_dir  = "${path.module}/lambda"
-  output_path = "${path.module}/lambda/lambda.zip"  # Output to dev/lambda/
+  output_path = "${path.module}/lambda/lambda.zip" # Output sending to dev/lambda/
 }
 
 resource "aws_lambda_function" "ecs_log_exporter" {
@@ -91,15 +91,15 @@ resource "aws_lambda_function" "ecs_log_exporter" {
   handler          = "index.handler"
   runtime          = "nodejs18.x"
   role             = aws_iam_role.lambda.arn
-  filename         = data.archive_file.lambda.output_path  # Use generated zip
-  source_code_hash = data.archive_file.lambda.output_base64sha256  # Correct hash
+  filename         = data.archive_file.lambda.output_path         # Use generated zip
+  source_code_hash = data.archive_file.lambda.output_base64sha256 # Correct hash
   environment {
     variables = {
       BUCKET_NAME = module.s3_logging.bucket_id
     }
   }
-  tags = var.tags
-  depends_on = [data.archive_file.lambda]  # Ensure zip is created first
+  tags       = var.tags
+  depends_on = [data.archive_file.lambda] # Ensure zip is created first
 }
 
 resource "aws_iam_role" "lambda" {
@@ -116,8 +116,8 @@ resource "aws_iam_role" "lambda" {
 }
 
 resource "aws_iam_role_policy" "lambda" {
-  name   = "lambda-ecs-log-exporter-policy"
-  role   = aws_iam_role.lambda.id
+  name = "lambda-ecs-log-exporter-policy"
+  role = aws_iam_role.lambda.id
   policy = jsonencode({
     Version = "2012-10-17"
     Statement = [
@@ -157,18 +157,16 @@ resource "aws_sns_topic" "pipeline_notifications" {
 resource "aws_sns_topic_subscription" "email" {
   topic_arn = aws_sns_topic.pipeline_notifications.arn
   protocol  = "email"
-  endpoint  = "your-email@example.com"  // Replace with your email
+  endpoint  = "bilalamjad0351@gamail.com"
 }
-
-# ECR Repository for hello-world
+# ECR Repository 
 resource "aws_ecr_repository" "hello_world" {
   name = "hello-world"
   tags = var.tags
 }
 
-# ECR Repository for custom-jenkins
+# ECR Repository
 resource "aws_ecr_repository" "custom_jenkins" {
   name = "custom-jenkins"
   tags = var.tags
 }
-
