@@ -4,21 +4,18 @@ module "app_vpc" {
   cidr   = "10.40.0.0/16"
   tags   = var.tags
 }
-
 module "jenkins_vpc" {
   source = "../../modules/vpc"
   name   = "jenkins"
   cidr   = "10.41.0.0/16"
   tags   = var.tags
 }
-
 resource "aws_vpc_peering_connection" "app_to_jenkins" {
   vpc_id      = module.app_vpc.vpc_id
   peer_vpc_id = module.jenkins_vpc.vpc_id
   auto_accept = true
   tags        = var.tags
 }
-
 module "app_ecs" {
   source                = "../../modules/ecs_cluster"
   name                  = "app"
@@ -33,7 +30,6 @@ module "app_ecs" {
   tags                  = var.tags
   depends_on            = [module.app_alb] # Ensure ALB is fully configured
 }
-
 module "jenkins_ecs" {
   source                = "../../modules/ecs_cluster"
   name                  = "jenkins"
@@ -43,19 +39,17 @@ module "jenkins_ecs" {
   container_image       = "216989105561.dkr.ecr.eu-central-1.amazonaws.com/custom-jenkins:latest"
   container_count       = 1
   cpu                   = 256 #can utilize var.app_cpu as per challenge 512
+  #target_group_arn      = aws_lb_target_group.jenkins_tg.arn
   target_group_arn      = module.jenkins_alb.target_group_arn
   alb_security_group_id = module.jenkins_alb.alb_security_group_id
   tags                  = var.tags
   depends_on            = [module.jenkins_alb] # Ensure ALB is fully configured
 }
-
-# S3 Logging Module
 module "s3_logging" {
   source = "../../modules/s3_logging"
   name   = "pipeline"
   tags   = var.tags
 }
-
 module "app_alb" {
   source               = "../../modules/alb"
   name                 = "app"
@@ -67,7 +61,6 @@ module "app_alb" {
   tags                 = var.tags
   certificate_arn      = "arn:aws:acm:eu-central-1:216989105561:certificate/15556a87-717c-44e7-8d68-aaf146333c17"
 }
-
 module "jenkins_alb" {
   source               = "../../modules/alb"
   name                 = "jenkins"
@@ -79,13 +72,11 @@ module "jenkins_alb" {
   tags                 = var.tags
   certificate_arn      = "arn:aws:acm:eu-central-1:216989105561:certificate/15556a87-717c-44e7-8d68-aaf146333c17"
 }
-# Lambda to Export ECS Logs to S3
 data "archive_file" "lambda" {
   type        = "zip"
   source_dir  = "${path.module}/lambda"
   output_path = "${path.module}/lambda/lambda.zip" # Output sending to dev/lambda/
 }
-
 resource "aws_lambda_function" "ecs_log_exporter" {
   function_name    = "ecs-log-exporter"
   handler          = "index.handler"
@@ -101,7 +92,6 @@ resource "aws_lambda_function" "ecs_log_exporter" {
   tags       = var.tags
   depends_on = [data.archive_file.lambda] # Ensure zip is created first
 }
-
 resource "aws_iam_role" "lambda" {
   name = "lambda-ecs-log-exporter-role"
   assume_role_policy = jsonencode({
@@ -114,7 +104,6 @@ resource "aws_iam_role" "lambda" {
   })
   tags = var.tags
 }
-
 resource "aws_iam_role_policy" "lambda" {
   name = "lambda-ecs-log-exporter-policy"
   role = aws_iam_role.lambda.id
@@ -127,20 +116,16 @@ resource "aws_iam_role_policy" "lambda" {
     ]
   })
 }
-
 resource "aws_cloudwatch_event_rule" "ecs_log_export_schedule" {
   name                = "ecs-log-export-schedule"
   schedule_expression = "rate(1 hour)"
   tags                = var.tags
 }
-
 resource "aws_cloudwatch_event_target" "ecs_log_export_lambda" {
   rule      = aws_cloudwatch_event_rule.ecs_log_export_schedule.name
   target_id = "ecsLogExporter"
   arn       = aws_lambda_function.ecs_log_exporter.arn
 }
-
-
 resource "aws_lambda_permission" "allow_cloudwatch" {
   statement_id  = "AllowExecutionFromCloudWatch"
   action        = "lambda:InvokeFunction"
@@ -148,24 +133,19 @@ resource "aws_lambda_permission" "allow_cloudwatch" {
   principal     = "events.amazonaws.com"
   source_arn    = aws_cloudwatch_event_rule.ecs_log_export_schedule.arn
 }
-# SNS Topic for Pipeline Notifications
 resource "aws_sns_topic" "pipeline_notifications" {
   name = "pipeline-notifications"
   tags = var.tags
 }
-
 resource "aws_sns_topic_subscription" "email" {
   topic_arn = aws_sns_topic.pipeline_notifications.arn
   protocol  = "email"
   endpoint  = "bilalamjad0351@gamail.com"
 }
-# ECR Repository 
 resource "aws_ecr_repository" "hello_world" {
   name = "hello-world"
   tags = var.tags
 }
-
-# ECR Repository
 resource "aws_ecr_repository" "custom_jenkins" {
   name = "custom-jenkins"
   tags = var.tags
