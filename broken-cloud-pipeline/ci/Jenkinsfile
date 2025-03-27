@@ -5,7 +5,7 @@ pipeline {
         ECR_REGISTRY = '216989105561.dkr.ecr.eu-central-1.amazonaws.com'
         ECR_REPO = 'hello-world'
         IMAGE_TAG = "${env.BUILD_NUMBER}"
-        ECS_CLUSTER = 'app-cluster' 
+        ECS_CLUSTER = 'app-cluster'  // From app_ecs module
         ECS_SERVICE = 'app-service'
         SNS_TOPIC = 'arn:aws:sns:eu-central-1:216989105561:pipeline-notifications'
     }
@@ -23,9 +23,9 @@ pipeline {
             steps {
                 // FLAW: Excessive logging bloats CloudWatch and S3 logs
                 sh 'echo "Excessive Logging: Docker environment details:"'
-                sh 'docker version'  
+                sh 'docker version'  // Unnecessary verbosity
                 sh 'docker build -t ${ECR_REGISTRY}/${ECR_REPO}:${IMAGE_TAG} .'
-                sh 'docker images'   
+                sh 'docker images'   // More noise
             }
         }
         stage('Push to ECR') {
@@ -65,7 +65,7 @@ pipeline {
                 // FLAW: Excessive logging bloats CloudWatch and S3 logs
                 sh 'echo "Excessive Logging: ECS deployment with task list:"'
                 sh 'aws ecs update-service --cluster ${ECS_CLUSTER} --service ${ECS_SERVICE} --force-new-deployment --region ${AWS_REGION}'
-                sh 'aws ecs list-tasks --cluster ${ECS_CLUSTER} --region ${AWS_REGION}'  
+                sh 'aws ecs list-tasks --cluster ${ECS_CLUSTER} --region ${AWS_REGION}'  // Unnecessary
             }
         }
     }
