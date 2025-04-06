@@ -1,40 +1,38 @@
 pipeline {
     agent any
+    parameters {
+        booleanParam(name: 'UPDATE_JENKINS', defaultValue: false, description: 'Set to true to update Jenkins service')
+    }
     environment {
         AWS_REGION = 'eu-central-1'
         ECR_REGISTRY = '216989105561.dkr.ecr.eu-central-1.amazonaws.com'
-        ECR_REPO = 'infrastructureascode/hello-world'
-        IMAGE_TAG = "${env.BUILD_NUMBER}"
-        ECS_CLUSTER = 'app-cluster'
-        ECS_SERVICE = 'app-service'
-        SNS_TOPIC = 'arn:aws:sns:eu-central-1:216989105561:pipeline-notifications'
         GIT_REPO = 'https://github.com/bilalamjad92/broken-cloud-pipeline.git'
+        SNS_TOPIC = 'arn:aws:sns:eu-central-1:216989105561:pipeline-notifications'
+        ECS_CLUSTER = 'app-cluster'
     }
     stages {
         stage('Checkout') {
             steps {
                 withCredentials([usernamePassword(credentialsId: 'github-cred-id', usernameVariable: 'GIT_USER', passwordVariable: 'GIT_PASS')]) {
                     git url: "${GIT_REPO}", branch: 'main', credentialsId: 'github-cred-id'
-                    sh 'echo "Excessive Logging: Full directory listing:"'
-                    sh 'ls -la || dir'
                 }
             }
         }
-        stage('Build Docker Image') {
-            steps {
-                sh 'docker build --build-arg TARGET=app -t ${ECR_REGISTRY}/${ECR_REPO}:${IMAGE_TAG} .'
+        stage('Build and Deploy Hello-World') {
+            environment {
+                ECR_REPO = 'infrastructureascode/hello-world'
+                IMAGE_TAG = "${env.BUILD_NUMBER}-hello-world"
+                ECS_SERVICE = 'app-service'
             }
-        }
-        stage('Push to ECR') {
             steps {
+                // Build Hello-World image
+                sh 'docker build -t ${ECR_REGISTRY}/${ECR_REPO}:${IMAGE_TAG} ./hello-world'
+                
+                // Push to ECR and deploy
                 withAWS(credentials: 'aws-cred-id', region: "${AWS_REGION}") {
                     script {
-                        // Authenticate with ECR
                         sh 'aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${ECR_REGISTRY}'
-                        // Push the image to ECR
                         sh 'docker push ${ECR_REGISTRY}/${ECR_REPO}:${IMAGE_TAG}'
-                        
-                        // Define and register the ECS task definition
                         def taskDef = """
                         {
                             "family": "app-task",
@@ -42,7 +40,7 @@ pipeline {
                             "containerDefinitions": [{
                                 "name": "hello-world",
                                 "image": "${ECR_REGISTRY}/${ECR_REPO}:${IMAGE_TAG}",
-                                "cpu": 512,
+                                "cpu": 256,
                                 "memory": 512,
                                 "portMappings": [{"containerPort": 8080, "hostPort": 0, "protocol": "tcp"}],
                                 "logConfiguration": {
@@ -56,17 +54,56 @@ pipeline {
                             }]
                         }
                         """
-                        writeFile file: 'task.json', text: taskDef
-                        def taskDefArn = sh(script: 'aws ecs register-task-definition --cli-input-json file://task.json --query "taskDefinition.taskDefinitionArn" --output text', returnStdout: true).trim()
-                        env.TASK_DEF_ARN = taskDefArn
+                        writeFile file: 'app-task.json', text: taskDef
+                        def taskDefArn = sh(script: 'aws ecs register-task-definition --cli-input-json file://app-task.json --query "taskDefinition.taskDefinitionArn" --output text', returnStdout: true).trim()
+                        sh 'aws ecs update-service --cluster ${ECS_CLUSTER} --service ${ECS_SERVICE} --task-definition ${taskDefArn} --region ${AWS_REGION}'
                     }
                 }
             }
         }
-        stage('Deploy to ECS') {
+        stage('Update Jenkins') {
+            when {
+                expression { params.UPDATE_JENKINS }
+            }
+            environment {
+                ECR_REPO = 'jenkins'
+                IMAGE_TAG = "${env.BUILD_NUMBER}-jenkins"
+                ECS_SERVICE = 'jenkins-service'
+            }
             steps {
+                // Build Jenkins image
+                sh 'docker build -t ${ECR_REGISTRY}/${ECR_REPO}:${IMAGE_TAG} ./jenkins'
+                
+                // Push to ECR and deploy
                 withAWS(credentials: 'aws-cred-id', region: "${AWS_REGION}") {
-                    sh 'aws ecs update-service --cluster $ECS_CLUSTER --service $ECS_SERVICE --task-definition $TASK_DEF_ARN --region $AWS_REGION'
+                    script {
+                        sh 'aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${ECR_REGISTRY}'
+                        sh 'docker push ${ECR_REGISTRY}/${ECR_REPO}:${IMAGE_TAG}'
+                        def taskDef = """
+                        {
+                            "family": "jenkins-task",
+                            "networkMode": "bridge",
+                            "containerDefinitions": [{
+                                "name": "jenkins",
+                                "image": "${ECR_REGISTRY}/${ECR_REPO}:${IMAGE_TAG}",
+                                "cpu": 512,
+                                "memory": 1024,
+                                "portMappings": [{"containerPort": 8080, "hostPort": 0, "protocol": "tcp"}],
+                                "logConfiguration": {
+                                    "logDriver": "awslogs",
+                                    "options": {
+                                        "awslogs-group": "/ecs/jenkins-task",
+                                        "awslogs-region": "eu-central-1",
+                                        "awslogs-stream-prefix": "ecs"
+                                    }
+                                }
+                            }]
+                        }
+                        """
+                        writeFile file: 'jenkins-task.json', text: taskDef
+                        def taskDefArn = sh(script: 'aws ecs register-task-definition --cli-input-json file://jenkins-task.json --query "taskDefinition.taskDefinitionArn" --output text', returnStdout: true).trim()
+                        sh 'aws ecs update-service --cluster ${ECS_CLUSTER} --service ${ECS_SERVICE} --task-definition ${taskDefArn} --region ${AWS_REGION}'
+                    }
                 }
             }
         }
@@ -74,8 +111,6 @@ pipeline {
     post {
         always {
             withAWS(credentials: 'aws-cred-id', region: "${AWS_REGION}") {
-                sh 'echo "Excessive Logging: Full environment dump:"'
-                sh 'env'
                 script {
                     def status = currentBuild.currentResult
                     sh "aws sns publish --topic-arn ${SNS_TOPIC} --message 'Pipeline ${status} - Build #${BUILD_NUMBER}'"
