@@ -3,11 +3,12 @@ pipeline {
     environment {
         AWS_REGION = 'eu-central-1'
         ECR_REGISTRY = '216989105561.dkr.ecr.eu-central-1.amazonaws.com'
-        ECR_REPO = 'hello-world'
+        ECR_REPO = 'infrastructureascode/hello-world'
         IMAGE_TAG = "${env.BUILD_NUMBER}"
-        ECS_CLUSTER = 'app-cluster'  // From app_ecs module
+        ECS_CLUSTER = 'app-cluster'
         ECS_SERVICE = 'app-service'
         SNS_TOPIC = 'arn:aws:sns:eu-central-1:216989105561:pipeline-notifications'
+        GIT_REPO = 'https://github.com/bilalamjad92/broken-cloud-pipeline.git'
     }
     stages {
         stage('Checkout') {
@@ -21,17 +22,19 @@ pipeline {
         }
         stage('Build Docker Image') {
             steps {
-                // FLAW: Excessive logging bloats CloudWatch and S3 logs
-                sh 'echo "Excessive Logging: Docker environment details:"'
-                sh 'docker version'  // Unnecessary verbosity
-                sh 'docker build -t ${ECR_REGISTRY}/${ECR_REPO}:${IMAGE_TAG} .'
-                sh 'docker images'   // More noise
+                sh 'docker build --build-arg TARGET=app -t ${ECR_REGISTRY}/${ECR_REPO}:${IMAGE_TAG} .'
             }
         }
         stage('Push to ECR') {
             steps {
                 withAWS(credentials: 'aws-cred-id', region: "${AWS_REGION}") {
                     script {
+                        // Authenticate with ECR
+                        sh 'aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${ECR_REGISTRY}'
+                        // Push the image to ECR
+                        sh 'docker push ${ECR_REGISTRY}/${ECR_REPO}:${IMAGE_TAG}'
+                        
+                        // Define and register the ECS task definition
                         def taskDef = """
                         {
                             "family": "app-task",
@@ -39,8 +42,8 @@ pipeline {
                             "containerDefinitions": [{
                                 "name": "hello-world",
                                 "image": "${ECR_REGISTRY}/${ECR_REPO}:${IMAGE_TAG}",
-                                "cpu": 512,  // Matches Terraform flaw
-                                "memory": 512,  // Matches Terraform
+                                "cpu": 512,
+                                "memory": 512,
                                 "portMappings": [{"containerPort": 8080, "hostPort": 0, "protocol": "tcp"}],
                                 "logConfiguration": {
                                     "logDriver": "awslogs",
@@ -54,7 +57,8 @@ pipeline {
                         }
                         """
                         writeFile file: 'task.json', text: taskDef
-                        sh 'aws ecs register-task-definition --cli-input-json file://task.json'
+                        def taskDefArn = sh(script: 'aws ecs register-task-definition --cli-input-json file://task.json --query "taskDefinition.taskDefinitionArn" --output text', returnStdout: true).trim()
+                        env.TASK_DEF_ARN = taskDefArn
                     }
                 }
             }
@@ -62,10 +66,8 @@ pipeline {
         stage('Deploy to ECS') {
             steps {
                 withAWS(credentials: 'aws-cred-id', region: "${AWS_REGION}") {
-                // FLAW: Excessive logging bloats CloudWatch and S3 logs
-                sh 'echo "Excessive Logging: ECS deployment with task list:"'
-                sh 'aws ecs update-service --cluster ${ECS_CLUSTER} --service ${ECS_SERVICE} --force-new-deployment --region ${AWS_REGION}'
-                sh 'aws ecs list-tasks --cluster ${ECS_CLUSTER} --region ${AWS_REGION}'  // Unnecessary
+                    sh 'aws ecs update-service --cluster $ECS_CLUSTER --service $ECS_SERVICE --task-definition $TASK_DEF_ARN --region $AWS_REGION'
+                }
             }
         }
     }
@@ -80,6 +82,5 @@ pipeline {
                 }
             }
         }
-
     }
 }
