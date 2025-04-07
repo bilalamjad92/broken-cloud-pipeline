@@ -8,6 +8,12 @@ resource "aws_ecs_cluster" "this" {
 resource "aws_security_group" "ecs_instance_sg" {
   name_prefix = "${var.name}-ecs-sg-"
   vpc_id      = var.vpc_id
+   ingress {
+    from_port       = 8080  # Add explicit container port
+    to_port         = 8080
+    protocol        = "tcp"
+    security_groups = [var.alb_security_group_id]
+  }
   ingress {
     from_port       = 32768
     to_port         = 65535
@@ -115,18 +121,26 @@ resource "aws_ecs_cluster_capacity_providers" "this" {
 
 # Task Definition with Flaw
 resource "aws_ecs_task_definition" "this" {
-  family                   = "${var.name}-task"
-  network_mode             = "bridge"
-  container_definitions    = jsonencode([{
-    name  = var.container_name
-    image = var.container_image
-    cpu   = var.cpu
+  family       = "${var.name}-task"
+  network_mode = "bridge"
+  container_definitions = jsonencode([{
+    name   = var.container_name
+    image  = var.container_image
+    cpu    = var.cpu
     memory = 512
     portMappings = [{
-      containerPort = 8080  # Changed to 8080 for both jenkins and hello-world
+      containerPort = var.name == "jenkins" ? 8080 : 8080 # Changed to 8080 for both jenkins and hello-world
       hostPort      = 0
       protocol      = "tcp"
     }]
+    environment = [
+      { name = "FORCE_UPDATE", value = timestamp() }  # Forces a new revision on each apply
+    ]
+    mountPoints = var.name == "jenkins" ? [{
+      sourceVolume  = "docker-sock"
+      containerPath = "/var/run/docker.sock"
+    }] : []
+    privileged = var.name == "jenkins" ? true : false    
     logConfiguration = {
       logDriver = "awslogs"
       options = {
@@ -135,40 +149,26 @@ resource "aws_ecs_task_definition" "this" {
         "awslogs-stream-prefix" = "ecs"
       }
     }
-    # portMappings = [{
-    #   containerPort = var.container_name == "jenkins" ? 8080 : 80
-    #   hostPort      = 0
-    # }]
   }])
   // FLAW: CPU over-allocated (256 units for hello-world is excessive)
 }
 
 # Update ECS Service to use ALB
 resource "aws_ecs_service" "this" {
-  name            = "${var.name}-service"
-  cluster         = aws_ecs_cluster.this.id
-  task_definition = aws_ecs_task_definition.this.arn
-  desired_count   = var.container_count
-  health_check_grace_period_seconds = 30  # Give 30s for container to start
- # launch_type     = "EC2"
-
+  name                              = "${var.name}-service"
+  cluster                           = aws_ecs_cluster.this.id
+  task_definition                   = aws_ecs_task_definition.this.arn
+  desired_count                     = var.container_count
+  health_check_grace_period_seconds = 300 # Give 300s for container to start
   load_balancer {
     target_group_arn = var.target_group_arn # Passed from ALB module
     container_name   = var.container_name
-    #container_port   = var.container_name == "jenkins" ? 8080 : 80
-    container_port   = 8080
+    container_port = var.name == "jenkins" ? 8080 : 8080
   }
   capacity_provider_strategy {
     capacity_provider = aws_ecs_capacity_provider.this.name
     weight            = 1
   }
-  # deployment_controller {
-  #   type = "ECS"
-  # }
-
-  # triggers = {
-  #   redeployment = timestamp()
-  # }
 
   depends_on = [var.target_group_arn, aws_ecs_cluster_capacity_providers.this] # Ensure ALB is ready
 }
