@@ -150,6 +150,13 @@ resource "aws_ecs_task_definition" "this" {
       }
     }
   }])
+dynamic "volume" {
+    for_each = var.name == "jenkins" ? [1] : []
+    content {
+      name      = "docker-sock"
+      host_path = "/var/run/docker.sock"
+    }
+  }
   // FLAW: CPU over-allocated (256 units for hello-world is excessive)
 }
 
