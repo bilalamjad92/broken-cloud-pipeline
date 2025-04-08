@@ -142,11 +142,3 @@ resource "aws_sns_topic_subscription" "email" {
   protocol  = "email"
   endpoint  = "bilalamjad0351@gamail.com"
 }
-resource "aws_ecr_repository" "hello_world" {
-  name = "hello-world"
-  tags = var.tags
-}
-resource "aws_ecr_repository" "custom_jenkins" {
-  name = "custom-jenkins"
-  tags = var.tags
-}
