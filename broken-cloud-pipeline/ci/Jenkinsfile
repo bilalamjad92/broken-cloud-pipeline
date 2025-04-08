@@ -16,13 +16,13 @@ pipeline {
                 withCredentials([usernamePassword(credentialsId: 'github-cred-id', usernameVariable: 'GIT_USER', passwordVariable: 'GIT_PASS')]) {
                     git url: "${GIT_REPO}", branch: 'main', credentialsId: 'github-cred-id'
                 }
-                // Change to the repository root directory
-                dir(workspace) {
+                // Change to the repository root directory (parent of ci/)
+                dir('..') {
                     // Set file permissions for Jenkins user, using paths relative to the repository root
                     sh '''
                         if [ -d "ci" ]; then
                             chown -R jenkins:jenkins ci
-                            chmod 644 ci/Dockerfile ci/jenkins/Dockerfile ci/jenkins/plugins.txt ci/jenkins/Jenkinsfile
+                            chmod 644 ci/Dockerfile ci/jenkins/Dockerfile ci/jenkins/plugins.txt ci/Jenkinsfile
                             chmod 755 ci/verify_health.sh
                         else
                             echo "Error: ci directory not found!"
@@ -39,10 +39,10 @@ pipeline {
                 ECS_SERVICE = 'app-service'
             }
             steps {
-                // Operate from the repository root
+                // Operate from the ci/ directory (where Jenkinsfile is)
                 dir(workspace) {
-                    // Build the application image from ci/Dockerfile
-                    sh 'docker build -t ${ECR_REGISTRY}/${ECR_REPO}:${IMAGE_TAG} ci'
+                    // Build the application image from ci/Dockerfile (relative to ci/ is just Dockerfile)
+                    sh 'docker build -t ${ECR_REGISTRY}/${ECR_REPO}:${IMAGE_TAG} .'
                     
                     withAWS(credentials: 'aws-cred-id', region: "${AWS_REGION}") {
                         script {
@@ -87,10 +87,10 @@ pipeline {
                 ECS_SERVICE = 'jenkins-service'
             }
             steps {
-                // Operate from the repository root
+                // Operate from the ci/ directory (where Jenkinsfile is)
                 dir(workspace) {
-                    // Build the Jenkins image from ci/jenkins/Dockerfile
-                    sh 'docker build -t ${ECR_REGISTRY}/${ECR_REPO}:${IMAGE_TAG} ci/jenkins'
+                    // Build the Jenkins image from ci/jenkins/Dockerfile (relative to ci/ is jenkins/Dockerfile)
+                    sh 'docker build -t ${ECR_REGISTRY}/${ECR_REPO}:${IMAGE_TAG} jenkins'
                     
                     withAWS(credentials: 'aws-cred-id', region: "${AWS_REGION}") {
                         script {
@@ -120,8 +120,8 @@ pipeline {
                             writeFile file: 'jenkins-task.json', text: taskDef
                             def taskDefArn = sh(script: 'aws ecs register-task-definition --cli-input-json file://jenkins-task.json --query "taskDefinition.taskDefinitionArn" --output text', returnStdout: true).trim()
                             sh 'aws ecs update-service --cluster ${ECS_CLUSTER} --service ${ECS_SERVICE} --task-definition ${taskDefArn} --region ${AWS_REGION}'
-                            // Run health check from updated path
-                            sh 'ci/verify_health.sh'
+                            // Run health check from updated path (relative to ci/)
+                            sh './verify_health.sh'
                         }
                     }
                 }
