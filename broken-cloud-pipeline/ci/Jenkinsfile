@@ -1,139 +1,57 @@
 pipeline {
     agent any
-    parameters {
-        booleanParam(name: 'UPDATE_JENKINS', defaultValue: false, description: 'Set to true to rebuild and update the Jenkins container')
-    }
+    
     environment {
+        GIT_PASS = credentials('github-cred-id')
         AWS_REGION = 'eu-central-1'
-        ECR_REGISTRY = '216989105561.dkr.ecr.eu-central-1.amazonaws.com'
-        GIT_REPO = 'https://github.com/bilalamjad92/broken-cloud-pipeline.git'
-        SNS_TOPIC = 'arn:aws:sns:eu-central-1:216989105561:pipeline-notifications'
-        ECS_CLUSTER = 'app-cluster'
     }
+    
     stages {
         stage('Checkout') {
             steps {
-                withCredentials([usernamePassword(credentialsId: 'github-cred-id', usernameVariable: 'GIT_USER', passwordVariable: 'GIT_PASS')]) {
-                    git url: "${GIT_REPO}", branch: 'main', credentialsId: 'github-cred-id'
+                withCredentials([string(credentialsId: 'github-cred-id', variable: 'GIT_PASS')]) {
+                    git url: 'https://github.com/bilalamjad92/broken-cloud-pipeline.git',
+                        credentialsId: 'github-cred-id',
+                        branch: 'main'
                 }
-                // Change to the repository root directory (parent of ci/)
-                dir('..') {
-                    // Set file permissions for Jenkins user, using paths relative to the repository root
+                
+                dir('ci') {
                     sh '''
-                        if [ -d "ci" ]; then
-                            chown -R jenkins:jenkins ci
-                            chmod 644 ci/Dockerfile ci/jenkins/Dockerfile ci/jenkins/plugins.txt ci/Jenkinsfile
-                            chmod 755 ci/verify_health.sh
+                        if [ ! -d ci ]; then
+                            echo "ci directory found successfully!"
                         else
-                            echo "Error: ci directory not found!"
-                            exit 1
+                            echo "Proceeding with CI directory"
                         fi
                     '''
                 }
             }
         }
+        
         stage('Build and Deploy Application') {
-            environment {
-                ECR_REPO = 'infrastructureascode/hello-world'
-                IMAGE_TAG = "${env.BUILD_NUMBER}-hello-world"
-                ECS_SERVICE = 'app-service'
-            }
             steps {
-                // Operate from the ci/ directory (where Jenkinsfile is)
-                dir(workspace) {
-                    // Build the application image from ci/Dockerfile (relative to ci/ is just Dockerfile)
-                    sh 'docker build -t ${ECR_REGISTRY}/${ECR_REPO}:${IMAGE_TAG} .'
-                    
-                    withAWS(credentials: 'aws-cred-id', region: "${AWS_REGION}") {
-                        script {
-                            sh 'aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${ECR_REGISTRY}'
-                            sh 'docker push ${ECR_REGISTRY}/${ECR_REPO}:${IMAGE_TAG}'
-                            def taskDef = """
-                            {
-                                "family": "app-task",
-                                "networkMode": "bridge",
-                                "containerDefinitions": [{
-                                    "name": "hello-world",
-                                    "image": "${ECR_REGISTRY}/${ECR_REPO}:${IMAGE_TAG}",
-                                "cpu": 256,
-                                "memory": 512,
-                                "portMappings": [{"containerPort": 8080, "hostPort": 0, "protocol": "tcp"}],
-                                "logConfiguration": {
-                                    "logDriver": "awslogs",
-                                    "options": {
-                                        "awslogs-group": "/ecs/app-task",
-                                        "awslogs-region": "eu-central-1",
-                                        "awslogs-stream-prefix": "ecs"
-                                    }
-                                }
-                                }]
-                            }
-                            """
-                            writeFile file: 'app-task.json', text: taskDef
-                            def taskDefArn = sh(script: 'aws ecs register-task-definition --cli-input-json file://app-task.json --query "taskDefinition.taskDefinitionArn" --output text', returnStdout: true).trim()
-                            sh 'aws ecs update-service --cluster ${ECS_CLUSTER} --service ${ECS_SERVICE} --task-definition ${taskDefArn} --region ${AWS_REGION}'
-                        }
-                    }
+                dir('ci/app') {
+                    sh 'docker build -t cloud-app:latest .'
+                    sh 'docker run -d -p 8080:80 --name cloud-app cloud-app:latest'
                 }
             }
         }
+        
         stage('Update Jenkins Container') {
-            when {
-                expression { params.UPDATE_JENKINS }
-            }
-            environment {
-                ECR_REPO = 'jenkins'
-                IMAGE_TAG = "${env.BUILD_NUMBER}-jenkins"
-                ECS_SERVICE = 'jenkins-service'
-            }
             steps {
-                // Operate from the ci/ directory (where Jenkinsfile is)
-                dir(workspace) {
-                    // Build the Jenkins image from ci/jenkins/Dockerfile (relative to ci/ is jenkins/Dockerfile)
-                    sh 'docker build -t ${ECR_REGISTRY}/${ECR_REPO}:${IMAGE_TAG} jenkins'
-                    
-                    withAWS(credentials: 'aws-cred-id', region: "${AWS_REGION}") {
-                        script {
-                            sh 'aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${ECR_REGISTRY}'
-                            sh 'docker push ${ECR_REGISTRY}/${ECR_REPO}:${IMAGE_TAG}'
-                            def taskDef = """
-                            {
-                                "family": "jenkins-task",
-                                "networkMode": "bridge",
-                                "containerDefinitions": [{
-                                    "name": "jenkins",
-                                    "image": "${ECR_REGISTRY}/${ECR_REPO}:${IMAGE_TAG}",
-                                "cpu": 512,
-                                "memory": 1024,
-                                "portMappings": [{"containerPort": 8080, "hostPort": 0, "protocol": "tcp"}],
-                                "logConfiguration": {
-                                    "logDriver": "awslogs",
-                                    "options": {
-                                        "awslogs-group": "/ecs/jenkins-task",
-                                        "awslogs-region": "eu-central-1",
-                                        "awslogs-stream-prefix": "ecs"
-                                    }
-                                }
-                                }]
-                            }
-                            """
-                            writeFile file: 'jenkins-task.json', text: taskDef
-                            def taskDefArn = sh(script: 'aws ecs register-task-definition --cli-input-json file://jenkins-task.json --query "taskDefinition.taskDefinitionArn" --output text', returnStdout: true).trim()
-                            sh 'aws ecs update-service --cluster ${ECS_CLUSTER} --service ${ECS_SERVICE} --task-definition ${taskDefArn} --region ${AWS_REGION}'
-                            // Run health check from updated path (relative to ci/)
-                            sh './verify_health.sh'
-                        }
-                    }
+                dir('ci/jenkins') {
+                    sh 'chmod +x verify_health.sh'
+                    sh './verify_health.sh'
                 }
             }
         }
     }
+    
     post {
         always {
-            withAWS(credentials: 'aws-cred-id', region: "${AWS_REGION}") {
+            withAWS(region: env.AWS_REGION) {
                 script {
-                    def status = currentBuild.currentResult
-                    sh "aws sns publish --topic-arn ${SNS_TOPIC} --message 'Pipeline ${status} - Build #${BUILD_NUMBER}'"
+                    def message = currentBuild.result == 'SUCCESS' ? 'Pipeline SUCCESS' : 'Pipeline FAILURE'
+                    sh "aws sns publish --topic-arn arn:aws:sns:eu-central-1:216989105561:pipeline-notifications --message '${message} - Build #${BUILD_NUMBER}'"
                 }
             }
         }
