@@ -25,8 +25,8 @@ pipeline {
                 ECS_SERVICE = 'app-service'
             }
             steps {
-                // Updated path: ../app/ instead of ./hello-world
-                sh 'docker build -t ${ECR_REGISTRY}/${ECR_REPO}:${IMAGE_TAG} ../app'
+                // Updated path to ci/app for the hello-world Dockerfile
+                sh 'docker build -t ${ECR_REGISTRY}/${ECR_REPO}:${IMAGE_TAG} ci/app'
                 
                 withAWS(credentials: 'aws-cred-id', region: "${AWS_REGION}") {
                     script {
@@ -70,7 +70,7 @@ pipeline {
                 ECS_SERVICE = 'jenkins-service'
             }
             steps {
-                // Updated path: ../jenkins/ instead of ./jenkins
+                // No change here as the Jenkins Dockerfile location wasn’t specified
                 sh 'docker build -t ${ECR_REGISTRY}/${ECR_REPO}:${IMAGE_TAG} ../jenkins'
                 
                 withAWS(credentials: 'aws-cred-id', region: "${AWS_REGION}") {
