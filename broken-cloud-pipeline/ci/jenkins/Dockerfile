@@ -18,5 +18,7 @@ RUN curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2
     rm -rf awscliv2.zip aws
 COPY plugins.txt /usr/share/jenkins/ref/plugins.txt
 RUN jenkins-plugin-cli -f /usr/share/jenkins/ref/plugins.txt
+RUN groupadd -g 1950 docker
+RUN usermod -aG docker jenkins
 EXPOSE 8080
 USER jenkins
