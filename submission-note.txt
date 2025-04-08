@@ -1,1 +1,25 @@
+Docker Configuration
+Separate Dockerfiles have been created for:
+The Hello World application
+The Jenkins CI/CD environment
 
+Web Application Firewall (WAF)
+WAF has been successfully configured and is operating correctly.
+
+Infrastructure Provisioning
+The infrastructure is being provisioned successfully using Infrastructure as Code (IaC) practices.
+All required AWS resources (ECS, EC2, ALB, IAM, etc.) are created and managed through Terraform, except for the ECR repositories (see below).
+
+Docker Socket Permissions
+The Docker socket issue was resolved by granting the Jenkins user appropriate permissions to access /var/run/docker.sock, enabling Docker commands to run within the pipeline.
+
+CI/CD Pipeline
+Jenkins pipeline is fully functional and:
+Builds the Docker image of the Hello World application
+Pushes the image to Amazon ECR
+Deploys the application to an ECS cluster (app-cluster)
+Performs a health check to verify the deployment
+The pipeline includes SNS notifications for success/failure events.
+
+ECR Repository Management
+Amazon ECR repositories are managed manually or outside Terraform.
