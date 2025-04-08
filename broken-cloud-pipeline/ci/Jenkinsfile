@@ -25,10 +25,9 @@ pipeline {
                 ECS_SERVICE = 'app-service'
             }
             steps {
-                // Build Hello-World image
-                sh 'docker build -t ${ECR_REGISTRY}/${ECR_REPO}:${IMAGE_TAG} ./hello-world'
+                // Updated path: ../hello-world/ instead of ./hello-world
+                sh 'docker build -t ${ECR_REGISTRY}/${ECR_REPO}:${IMAGE_TAG} ../hello-world'
                 
-                // Push to ECR and deploy
                 withAWS(credentials: 'aws-cred-id', region: "${AWS_REGION}") {
                     script {
                         sh 'aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${ECR_REGISTRY}'
@@ -71,10 +70,9 @@ pipeline {
                 ECS_SERVICE = 'jenkins-service'
             }
             steps {
-                // Build Jenkins image
-                sh 'docker build -t ${ECR_REGISTRY}/${ECR_REPO}:${IMAGE_TAG} ./jenkins'
+                // Updated path: ../jenkins/ instead of ./jenkins
+                sh 'docker build -t ${ECR_REGISTRY}/${ECR_REPO}:${IMAGE_TAG} ../jenkins'
                 
-                // Push to ECR and deploy
                 withAWS(credentials: 'aws-cred-id', region: "${AWS_REGION}") {
                     script {
                         sh 'aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${ECR_REGISTRY}'
