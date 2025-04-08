@@ -2,28 +2,28 @@ pipeline {
     agent any
     
     environment {
-        GIT_PASS = credentials('github-cred-id')
         AWS_REGION = 'eu-central-1'
     }
     
     stages {
         stage('Checkout') {
             steps {
-                withCredentials([string(credentialsId: 'github-cred-id', variable: 'GIT_PASS')]) {
+                // Use the correct credential type
+                withCredentials([usernamePassword(credentialsId: 'github-cred-id', usernameVariable: 'GIT_USER', passwordVariable: 'GIT_PASS')]) {
                     git url: 'https://github.com/bilalamjad92/broken-cloud-pipeline.git',
                         credentialsId: 'github-cred-id',
                         branch: 'main'
                 }
                 
-                dir('ci') {
-                    sh '''
-                        if [ ! -d ci ]; then
-                            echo "ci directory found successfully!"
-                        else
-                            echo "Proceeding with CI directory"
-                        fi
-                    '''
-                }
+                // Check for ci directory
+                sh '''
+                    if [ -d ci ]; then
+                        echo "ci directory found successfully!"
+                    else
+                        echo "Error: ci directory not found!"
+                        exit 1
+                    fi
+                '''
             }
         }
         
@@ -48,10 +48,16 @@ pipeline {
     
     post {
         always {
-            withAWS(region: env.AWS_REGION) {
-                script {
-                    def message = currentBuild.result == 'SUCCESS' ? 'Pipeline SUCCESS' : 'Pipeline FAILURE'
-                    sh "aws sns publish --topic-arn arn:aws:sns:eu-central-1:216989105561:pipeline-notifications --message '${message} - Build #${BUILD_NUMBER}'"
+            // Handle SNS notification with error handling
+            script {
+                try {
+                    withAWS(region: env.AWS_REGION) {
+                        def message = currentBuild.result == 'SUCCESS' ? 'Pipeline SUCCESS' : 'Pipeline FAILURE'
+                        sh "aws sns publish --topic-arn arn:aws:sns:eu-central-1:216989105561:pipeline-notifications --message '${message} - Build #${BUILD_NUMBER}'"
+                    }
+                } catch (Exception e) {
+                    echo "Warning: Could not send SNS notification: ${e.message}"
+                    // Continue execution without failing the pipeline
                 }
             }
         }
