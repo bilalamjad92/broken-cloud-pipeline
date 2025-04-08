@@ -37,6 +37,6 @@ RUN if getent group docker; then \
       groupadd -g 1950 docker; \
     fi && \
     usermod -aG docker jenkins
-
+CMD ["sh", "-c", "dockerd & sleep 5 && jenkins.sh"]  # Start dockerd, wait, then Jenkins
 EXPOSE 8080
 USER jenkins
