@@ -3,19 +3,24 @@ pipeline {
     
     environment {
         AWS_REGION = 'eu-central-1'
+        ECR_REGISTRY = '216989105561.dkr.ecr.eu-central-1.amazonaws.com'
+        ECR_REPO = 'infrastructureascode/hello-world'
+        IMAGE_TAG = "${env.BUILD_NUMBER}-hello-world"
+        ECS_CLUSTER = 'app-cluster'
+        ECS_SERVICE = 'app-service'
+        SNS_TOPIC = 'arn:aws:sns:eu-central-1:216989105561:pipeline-notifications'
+        S3_BUCKET = 'pipeline-logs'
     }
     
     stages {
         stage('Checkout') {
             steps {
-                // Use the correct credential type
                 withCredentials([usernamePassword(credentialsId: 'github-cred-id', usernameVariable: 'GIT_USER', passwordVariable: 'GIT_PASS')]) {
                     git url: 'https://github.com/bilalamjad92/broken-cloud-pipeline.git',
                         credentialsId: 'github-cred-id',
                         branch: 'main'
                 }
                 
-                // Check for ci directory
                 sh '''
                     if [ -d ci ]; then
                         echo "ci directory found successfully!"
@@ -27,18 +32,68 @@ pipeline {
             }
         }
         
-        stage('Build and Deploy Application') {
+        stage('Build Application Image') {
             steps {
                 dir('ci/app') {
-                    sh 'docker build -t cloud-app:latest .'
-                    sh 'docker run -d -p 8080:80 --name cloud-app cloud-app:latest'
+                    script {
+                        // FLAW: Log every Docker command to S3, inflating costs
+                        sh 'docker build -t ${ECR_REGISTRY}/${ECR_REPO}:${IMAGE_TAG} . 2>&1 | tee build.log'
+                        sh 'aws s3 cp build.log s3://${S3_BUCKET}/docker-logs/build-${BUILD_NUMBER}.log'
+                    }
                 }
             }
         }
         
-        stage('Update Jenkins Container') {
+        stage('Push Image to ECR') {
             steps {
-                dir('ci/jenkins') {
+                withAWS(credentials: 'aws-cred-id', region: "${AWS_REGION}") {
+                    script {
+                        sh 'aws ecr get-login-password --region ${AWS_REGION} | docker login --username AWS --password-stdin ${ECR_REGISTRY} 2>&1 | tee login.log'
+                        sh 'aws s3 cp login.log s3://${S3_BUCKET}/docker-logs/login-${BUILD_NUMBER}.log'
+                        sh 'docker push ${ECR_REGISTRY}/${ECR_REPO}:${IMAGE_TAG} 2>&1 | tee push.log'
+                        sh 'aws s3 cp push.log s3://${S3_BUCKET}/docker-logs/push-${BUILD_NUMBER}.log'
+                    }
+                }
+            }
+        }
+        
+        stage('Deploy to ECS') {
+            steps {
+                withAWS(credentials: 'aws-cred-id', region: "${AWS_REGION}") {
+                    script {
+                        def taskDef = """
+                        {
+                            "family": "app-task",
+                            "networkMode": "bridge",
+                            "containerDefinitions": [{
+                                "name": "hello-world",
+                                "image": "${ECR_REGISTRY}/${ECR_REPO}:${IMAGE_TAG}",
+                                "cpu": 256,
+                                "memory": 512,
+                                "portMappings": [{"containerPort": 8080, "hostPort": 0, "protocol": "tcp"}],
+                                "logConfiguration": {
+                                    "logDriver": "awslogs",
+                                    "options": {
+                                        "awslogs-group": "/ecs/app-task",
+                                        "awslogs-region": "eu-central-1",
+                                        "awslogs-stream-prefix": "ecs"
+                                    }
+                                }
+                            }]
+                        }
+                        """
+                        writeFile file: 'app-task.json', text: taskDef
+                        def taskDefArn = sh(script: 'aws ecs register-task-definition --cli-input-json file://app-task.json --query "taskDefinition.taskDefinitionArn" --output text', returnStdout: true).trim()
+                        sh 'aws ecs update-service --cluster ${ECS_CLUSTER} --service ${ECS_SERVICE} --task-definition ${taskDefArn} --region ${AWS_REGION}'
+                        sh 'aws ecs wait services-stable --cluster ${ECS_CLUSTER} --services ${ECS_SERVICE} --region ${AWS_REGION}'
+                    }
+                }
+            }
+        }
+        
+        stage('Verify Deployment') {
+            steps {
+                dir('ci') {
                     sh 'chmod +x verify_health.sh'
                     sh './verify_health.sh'
                 }
@@ -48,18 +103,20 @@ pipeline {
     
     post {
         always {
-            // Handle SNS notification with error handling
             script {
                 try {
-                    withAWS(region: env.AWS_REGION) {
+                    withAWS(credentials: 'aws-cred-id', region: "${AWS_REGION}") {
                         def message = currentBuild.result == 'SUCCESS' ? 'Pipeline SUCCESS' : 'Pipeline FAILURE'
-                        sh "aws sns publish --topic-arn arn:aws:sns:eu-central-1:216989105561:pipeline-notifications --message '${message} - Build #${BUILD_NUMBER}'"
+                        sh "aws sns publish --topic-arn ${SNS_TOPIC} --message '${message} - Build #${BUILD_NUMBER}'"
                     }
                 } catch (Exception e) {
                     echo "Warning: Could not send SNS notification: ${e.message}"
-                    // Continue execution without failing the pipeline
                 }
             }
+            sh '''
+                docker rmi ${ECR_REGISTRY}/${ECR_REPO}:${IMAGE_TAG} || true
+                docker image prune -f || true
+            '''
         }
     }
 }
