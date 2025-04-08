@@ -20,13 +20,11 @@ pipeline {
                         credentialsId: 'github-cred-id',
                         branch: 'main'
                 }
-                
-                // Since Jenkinsfile is in ci/, check the current directory
                 sh '''
-                    if [ -d . ]; then
-                        echo "ci directory found successfully!"
+                    if [ -d app ]; then
+                        echo "app directory found successfully!"
                     else
-                        echo "Error: ci directory not found!"
+                        echo "Error: app directory not found!"
                         exit 1
                     fi
                 '''
@@ -35,7 +33,7 @@ pipeline {
         
         stage('Build Application Image') {
             steps {
-                dir('app') {  // Relative to ci/
+                dir('app') {
                     script {
                         // FLAW: Log every Docker command to S3, inflating costs
                         sh 'docker build -t ${ECR_REGISTRY}/${ECR_REPO}:${IMAGE_TAG} . 2>&1 | tee build.log'
@@ -94,8 +92,15 @@ pipeline {
         
         stage('Verify Deployment') {
             steps {
-                sh 'chmod +x verify_health.sh'  // Relative to ci/
-                sh './verify_health.sh'
+                withAWS(credentials: 'aws-cred-id', region: "${AWS_REGION}") {
+                    script {
+                        // Dynamically fetch ALB DNS
+                        def albDns = sh(script: 'aws elbv2 describe-load-balancers --region ${AWS_REGION} --names "app-alb" --query "LoadBalancers[0].DNSName" --output text', returnStdout: true).trim()
+                        env.APP_ALB_DNS = albDns
+                        sh 'chmod +x verify_health.sh'
+                        sh './verify_health.sh'
+                    }
+                }
             }
         }
     }
@@ -112,11 +117,6 @@ pipeline {
                     echo "Warning: Could not send SNS notification: ${e.message}"
                 }
             }
-            // Temporarily remove Docker cleanup until permissions are fixed
-            // sh '''
-            //     docker rmi ${ECR_REGISTRY}/${ECR_REPO}:${IMAGE_TAG} || true
-            //     docker image prune -f || true
-            // '''
         }
     }
 }
